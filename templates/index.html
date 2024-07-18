@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>trv - AI Audio and Video Transcription</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            text-align: center;
+        }
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 20px;
+        }
+        p {
+            font-size: 1.2rem;
+            margin-bottom: 30px;
+        }
+        input[type="file"] {
+            padding: 10px;
+            background-color: #1e1e1e;
+            border: 2px solid #3c3c3c;
+            border-radius: 5px;
+            color: #ffffff;
+            cursor: pointer;
+        }
+        input[type="file"]::file-selector-button {
+            background-color: rgb(74, 224, 129);
+            color: #ffffff;
+            border: none;
+            padding: 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        input[type="file"]::file-selector-button:hover {
+            background-color: rgb(253, 225, 76);
+        }
+
+	button {
+		margin-top: 20px;
+		padding: 10px 20px;
+		background-color: #6200ea;
+		color: #ffffff;
+		border: none;
+		border-radius: 5px;
+		cursor: pointer;
+	}
+	button:hover {
+		background-color: #3700b3;
+	}
+
+        .spinner {
+            display: none;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-left-color: #ffffff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin-top: 20px;
+        }
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>trv</h1>
+        <p>AI Audio and Video Transcription</p>
+        <input id="fileInput" type="file" accept="audio/*,video/*" multiple="multiple">
+        <button onclick="uploadFiles()">Upload</button>
+		<div class="spinner" id="spinner"></div>
+    </div>
+
+
+
+	<script>
+		
+async function uploadFiles() {
+    const input = document.getElementById('fileInput');
+    const files = input.files;
+	const spinner = document.getElementById('spinner');
+
+    if (files.length === 0) {
+        alert('Please select a file to upload.');
+        return;
+    }
+
+    const formData = new FormData();
+    for (const file of files) {
+        formData.append('files', file);
+    }
+
+    try {
+        const response = await fetch('/upload', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+
+		const data = await response.json();
+		spinner.style.display = 'block';
+        alert('Files uploaded successfully, fileids: ' + data["file_ids"]);
+
+    } catch (error) {
+        console.error('Error:', error);
+        alert('File upload failed.');
+    }
+}
+	
+
+
+	</script>
+
+</body>
+</html>
+<html>
+

@@ -1,7 +1,8 @@
 mod controllers;
 mod env;
-mod server;
 mod process;
+mod server;
+mod whisper_pool;
 
 #[tokio::main]
 async fn main() {

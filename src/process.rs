@@ -1,256 +1,161 @@
-use std::env;
-use std::path::Path;
+use hound::WavReader;
+use std::sync::{Arc, Mutex};
+use tokio::process::Command;
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
-use ffmpeg_next as ffmpeg;
-
-use ffmpeg::{codec, filter, format, frame, media};
-use ffmpeg::{rescale, Rescale};
-
-fn filter(
-    spec: &str,
-    decoder: &codec::decoder::Audio,
-    encoder: &codec::encoder::Audio,
-) -> Result<filter::Graph, ffmpeg::Error> {
-    let mut filter = filter::Graph::new();
-
-    let args = format!(
-        "time_base={}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
-        decoder.time_base(),
-        decoder.rate(),
-        decoder.format().name(),
-        decoder.channel_layout().bits()
-    );
-
-    filter.add(&filter::find("abuffer").unwrap(), "in", &args)?;
-    filter.add(&filter::find("abuffersink").unwrap(), "out", "")?;
-
-    {
-        let mut out = filter.get("out").unwrap();
-
-        out.set_sample_format(encoder.format());
-        out.set_channel_layout(encoder.channel_layout());
-        out.set_sample_rate(encoder.rate());
-    }
-
-    filter.output("in", 0)?.input("out", 0)?.parse(spec)?;
-    filter.validate()?;
-
-    println!("{}", filter.dump());
-
-    if let Some(codec) = encoder.codec() {
-        if !codec
-            .capabilities()
-            .contains(ffmpeg::codec::capabilities::Capabilities::VARIABLE_FRAME_SIZE)
-        {
-            filter
-                .get("out")
-                .unwrap()
-                .sink()
-                .set_frame_size(encoder.frame_size());
-        }
-    }
-
-    Ok(filter)
-}
-
-struct Transcoder {
-    stream: usize,
-    filter: filter::Graph,
-    decoder: codec::decoder::Audio,
-    encoder: codec::encoder::Audio,
-    in_time_base: ffmpeg::Rational,
-    out_time_base: ffmpeg::Rational,
-}
-
-fn transcoder<P: AsRef<Path> + ?Sized>(
-    ictx: &mut format::context::Input,
-    octx: &mut format::context::Output,
-    path: &P,
-    filter_spec: &str,
-) -> Result<Transcoder, ffmpeg::Error> {
-    let input = ictx
-        .streams()
-        .best(media::Type::Audio)
-        .expect("could not find best audio stream");
-    let context = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
-    let mut decoder = context.decoder().audio()?;
-    let codec = ffmpeg::encoder::find(octx.format().codec(path, media::Type::Audio))
-        .expect("failed to find encoder")
-        .audio()?;
-    let global = octx
-        .format()
-        .flags()
-        .contains(ffmpeg::format::flag::Flags::GLOBAL_HEADER);
-
-    decoder.set_parameters(input.parameters())?;
-
-    let mut output = octx.add_stream(codec)?;
-    let context = ffmpeg::codec::context::Context::from_parameters(output.parameters())?;
-    let mut encoder = context.encoder().audio()?;
-
-    let channel_layout = codec
-        .channel_layouts()
-        .map(|cls| cls.best(decoder.channel_layout().channels()))
-        .unwrap_or(ffmpeg::channel_layout::ChannelLayout::STEREO);
-
-    if global {
-        encoder.set_flags(ffmpeg::codec::flag::Flags::GLOBAL_HEADER);
-    }
-
-    encoder.set_rate(decoder.rate() as i32);
-    encoder.set_channel_layout(channel_layout);
-    encoder.set_format(
-        codec
-            .formats()
-            .expect("unknown supported formats")
-            .next()
-            .unwrap(),
-    );
-    encoder.set_bit_rate(decoder.bit_rate());
-    encoder.set_max_bit_rate(decoder.max_bit_rate());
-
-    encoder.set_time_base((1, decoder.rate() as i32));
-    output.set_time_base((1, decoder.rate() as i32));
-
-    let encoder = encoder.open_as(codec)?;
-    output.set_parameters(&encoder);
-
-    let filter = filter(filter_spec, &decoder, &encoder)?;
-
-    let in_time_base = decoder.time_base();
-    let out_time_base = output.time_base();
-
-    Ok(Transcoder {
-        stream: input.index(),
-        filter,
-        decoder,
-        encoder,
-        in_time_base,
-        out_time_base,
-    })
-}
-
-impl Transcoder {
-    fn send_frame_to_encoder(&mut self, frame: &ffmpeg::Frame) {
-        self.encoder.send_frame(frame).unwrap();
-    }
-
-    fn send_eof_to_encoder(&mut self) {
-        self.encoder.send_eof().unwrap();
-    }
-
-    fn receive_and_process_encoded_packets(&mut self, octx: &mut format::context::Output) {
-        let mut encoded = ffmpeg::Packet::empty();
-        while self.encoder.receive_packet(&mut encoded).is_ok() {
-            encoded.set_stream(0);
-            encoded.rescale_ts(self.in_time_base, self.out_time_base);
-            encoded.write_interleaved(octx).unwrap();
-        }
-    }
-
-    fn add_frame_to_filter(&mut self, frame: &ffmpeg::Frame) {
-        self.filter.get("in").unwrap().source().add(frame).unwrap();
-    }
-
-    fn flush_filter(&mut self) {
-        self.filter.get("in").unwrap().source().flush().unwrap();
-    }
-
-    fn get_and_process_filtered_frames(&mut self, octx: &mut format::context::Output) {
-        let mut filtered = frame::Audio::empty();
-        while self
-            .filter
-            .get("out")
-            .unwrap()
-            .sink()
-            .frame(&mut filtered)
-            .is_ok()
-        {
-            self.send_frame_to_encoder(&filtered);
-            self.receive_and_process_encoded_packets(octx);
-        }
-    }
-
-    fn send_packet_to_decoder(&mut self, packet: &ffmpeg::Packet) {
-        self.decoder.send_packet(packet).unwrap();
-    }
-
-    fn send_eof_to_decoder(&mut self) {
-        self.decoder.send_eof().unwrap();
-    }
-
-    fn receive_and_process_decoded_frames(&mut self, octx: &mut format::context::Output) {
-        let mut decoded = frame::Audio::empty();
-        while self.decoder.receive_frame(&mut decoded).is_ok() {
-            let timestamp = decoded.timestamp();
-            decoded.set_pts(timestamp);
-            self.add_frame_to_filter(&decoded);
-            self.get_and_process_filtered_frames(octx);
-        }
-    }
-}
-
-// Transcode the `best` audio stream of the input file into a the output file while applying a
-// given filter. If no filter was specified the stream gets copied (`anull` filter).
-//
-// Example 1: Transcode *.mp3 file to *.wmv while speeding it up
-// transcode-audio in.mp3 out.wmv "atempo=1.2"
-//
-// Example 2: Overlay an audio file
-// transcode-audio in.mp3 out.mp3 "amovie=overlay.mp3 [ov]; [in][ov] amerge [out]"
-//
-// Example 3: Seek to a specified position (in seconds)
-// transcode-audio in.mp3 out.mp3 anull 30
-fn main() {
-    ffmpeg::init().unwrap();
-
-    let input = env::args().nth(1).expect("missing input");
-    let output = env::args().nth(2).expect("missing output");
-    let filter = env::args().nth(3).unwrap_or_else(|| "anull".to_owned());
-    let seek = env::args().nth(4).and_then(|s| s.parse::<i64>().ok());
-
-    let mut ictx = format::input(&input).unwrap();
-    let mut octx = format::output(&output).unwrap();
-    let mut transcoder = transcoder(&mut ictx, &mut octx, &output, &filter).unwrap();
-
-    if let Some(position) = seek {
-        // If the position was given in seconds, rescale it to ffmpegs base timebase.
-        let position = position.rescale((1, 1), rescale::TIME_BASE);
-        // If this seek was embedded in the transcoding loop, a call of `flush()`
-        // for every opened buffer after the successful seek would be advisable.
-        ictx.seek(position, ..position).unwrap();
-    }
-
-    octx.set_metadata(ictx.metadata().to_owned());
-    octx.write_header().unwrap();
-
-    for (stream, mut packet) in ictx.packets() {
-        if stream.index() == transcoder.stream {
-            packet.rescale_ts(stream.time_base(), transcoder.in_time_base);
-            transcoder.send_packet_to_decoder(&packet);
-            transcoder.receive_and_process_decoded_frames(&mut octx);
-        }
-    }
-
-    transcoder.send_eof_to_decoder();
-    transcoder.receive_and_process_decoded_frames(&mut octx);
-
-    transcoder.flush_filter();
-    transcoder.get_and_process_filtered_frames(&mut octx);
-
-    transcoder.send_eof_to_encoder();
-    transcoder.receive_and_process_encoded_packets(&mut octx);
-
-    octx.write_trailer().unwrap();
-}
-
-pub async fn process(tmpfile_name: String) {
-    
-    let output_path = format!("output:{}.wav", tmpfile_name);
+pub async fn process(
+    tmpfile_name: String,
+    whisper_state: Arc<Mutex<WhisperState>>,
+) -> Result<String, impl std::error::Error> {
+    let output_path = format!("{}_output.wav", tmpfile_name);
     let input_path = tmpfile_name;
 
-    let mut input = format::input(&input_path).unwrap();
-    let mut output = format::output(&output_path).unwrap();
+    let _output = match Command::new("ffmpeg")
+        .arg("-i")
+        .arg(input_path)
+        .arg("-acodec")
+        .arg("pcm_s16le")
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg("16000")
+        .arg(output_path.clone())
+        .output()
+        .await
+    {
+        Ok(ffmpeg_out) => ffmpeg_out,
+        Err(e) => {
+            return Result::Err(e);
+        }
+    };
 
-    let t = transcoder(&mut input, &mut output, &output_path, "acodec=pcm_s16le ac=1 ar=16000").unwrap();
+    let transcribed_text = transcribe_audio(whisper_state, &output_path).await.unwrap();
+    return Result::Ok(transcribed_text);
+}
+
+#[derive(Debug, Clone)]
+struct TranscribeError<'a> {
+    errormsg: &'a str,
+}
+
+impl<'a> std::error::Error for TranscribeError<'a> {}
+
+impl<'a> std::fmt::Display for TranscribeError<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.errormsg)
+    }
+}
+
+async fn transcribe_audio<'state>(
+    whisper_state: Arc<Mutex<WhisperState>>,
+    filepath: &String,
+) -> Result<String, TranscribeError> {
+    // Create a params object for running the model.
+    // The number of past samples to consider defaults to 0.
+
+    let mut output_buffer = Vec::new();
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 0 });
+    // Edit params as needed.
+    // Set the number of threads to use to 1.
+    // Enable translation.
+    params.set_translate(true);
+    // Set the language to translate to to English.
+    params.set_language(Some("en"));
+    // Disable anything that prints to stdout.
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+
+    let reader = WavReader::open(filepath).unwrap();
+    // Convert the audio to floating point samples.
+    let samples: Vec<i16> = reader
+        .into_samples::<i16>()
+        .map(|x| x.expect("Invalid sample"))
+        .collect();
+    let mut audio = vec![0.0f32; samples.len().try_into().unwrap()];
+    whisper_rs::convert_integer_to_float_audio(&samples, &mut audio).expect("Conversion error");
+
+    // Open the audio file.
+    let reader = hound::WavReader::open(filepath).expect("failed to open file");
+    #[allow(unused_variables)]
+    let hound::WavSpec {
+        channels,
+        sample_rate,
+        bits_per_sample,
+        ..
+    } = reader.spec();
+
+    // Convert the audio to floating point samples.
+    let samples: Vec<i16> = reader
+        .into_samples::<i16>()
+        .map(|x| x.expect("Invalid sample"))
+        .collect();
+    let mut audio = vec![0.0f32; samples.len().try_into().unwrap()];
+    whisper_rs::convert_integer_to_float_audio(&samples, &mut audio).expect("Conversion error");
+
+    // Convert audio to 16KHz mono f32 samples, as required by the model.
+    // These utilities are provided for convenience, but can be replaced with custom conversion logic.
+    // SIMD variants of these functions are also available on nightly Rust (see the docs).
+    if channels == 2 {
+        audio = whisper_rs::convert_stereo_to_mono_audio(&audio).expect("Conversion error");
+    } else if channels != 1 {
+        return Result::Err(TranscribeError {
+            errormsg: "2 channels are not allowed",
+        });
+    }
+
+    if sample_rate != 16000 {
+        return Result::Err(TranscribeError {
+            errormsg: "Sample rate should be 16000",
+        });
+    }
+
+    // Run the model.
+
+    let mut whisper_state_lock = whisper_state.lock().unwrap();
+    whisper_state_lock
+        .full(params, &audio[..])
+        .expect("failed to run model");
+
+    // Iterate through the segments of the transcript.
+    let num_segments = whisper_state_lock
+        .full_n_segments()
+        .expect("failed to get number of segments");
+    for i in 0..num_segments {
+        // Get the transcribed text and timestamps for the current segment.
+        let segment = whisper_state_lock
+            .full_get_segment_text(i)
+            .expect("failed to get segment");
+
+        // Segments are not being used right now due to the sake of simplicity
+        //        let start_timestamp = state
+        //            .full_get_segment_t0(i)
+        //            .expect("failed to get start timestamp");
+        //        let end_timestamp = state
+        //            .full_get_segment_t1(i)
+        //            .expect("failed to get end timestamp");
+
+        let _first_token_dtw_ts = if let Ok(token_count) = whisper_state_lock.full_n_tokens(i) {
+            if token_count > 0 {
+                if let Ok(token_data) = whisper_state_lock.full_get_token_data(i, 0) {
+                    token_data.t_dtw
+                } else {
+                    -1i64
+                }
+            } else {
+                -1i64
+            }
+        } else {
+            -1i64
+        };
+
+        // Format the segment information as a string.
+        let line = format!("{}\n", segment);
+        // Write the segment information to the output buffer.
+        output_buffer.extend_from_slice(line.as_bytes());
+    }
+    Ok(String::from_utf8(output_buffer).unwrap())
 }

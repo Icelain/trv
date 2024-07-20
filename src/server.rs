@@ -1,9 +1,5 @@
 use crate::{controllers, env};
-use axum::{
-    serve, Router,
-    extract::DefaultBodyLimit,
-
-};
+use axum::{extract::DefaultBodyLimit, serve, Router};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -27,7 +23,7 @@ fn apply_middleware(router: Router<()>) -> Router<()> {
         ServiceBuilder::new()
             .layer(TraceLayer::new_for_http())
             .layer(CorsLayer::very_permissive())
-            .layer(DefaultBodyLimit::max(2147483648))
+            .layer(DefaultBodyLimit::max(2147483648)),
     );
 
     return router;

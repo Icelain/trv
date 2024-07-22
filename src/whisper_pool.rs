@@ -1,6 +1,5 @@
-use tokio::select;
 use std::sync::{Arc, Mutex};
-use whisper_rs::{WhisperState, WhisperContextParameters, WhisperContext};
+use whisper_rs::{WhisperContext, WhisperContextParameters, WhisperState};
 
 fn create_whisper_state() -> Arc<Mutex<WhisperState>> {
     let mut context_param = WhisperContextParameters::default();
@@ -41,26 +40,22 @@ fn create_whisper_state() -> Arc<Mutex<WhisperState>> {
 
 pub struct WhisperPool {
 
-    state: Arc<Mutex<WhisperState>>
-
+    // only one state for now
+    states: [Arc<Mutex<WhisperState>>; 1],
 }
 
+
+
 impl WhisperPool {
-    
-    pub fn new_pool() -> Self{
-
+    pub fn new_pool() -> Self {
         Self {
-
-            state: create_whisper_state()
-
+            states: [create_whisper_state()],
         }
-
     }
 
     pub fn get_state(&self) -> Arc<Mutex<WhisperState>> {
-
-        return self.state.clone();
+        
+        return self.states[0].clone();
 
     }
- 
 }

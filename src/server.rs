@@ -4,7 +4,7 @@ use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-pub async fn start(opts: env::EnvOptions) {
+pub async fn start(opts: &env::EnvOptions) {
     let router: Router<()> = Router::new();
 
     let router = apply_routing(router);

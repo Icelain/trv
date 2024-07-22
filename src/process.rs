@@ -1,9 +1,7 @@
 use hound::WavReader;
 use std::sync::{Arc, Mutex};
 use tokio::process::Command;
-use whisper_rs::{
-    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
-};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperState};
 
 pub async fn process(
     tmpfile_name: String,

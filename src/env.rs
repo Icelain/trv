@@ -2,6 +2,7 @@ use std::env;
 
 pub struct EnvOptions {
     pub port: usize,
+    pub model_path: String,
 }
 
 pub fn get_opts() -> EnvOptions {
@@ -19,5 +20,10 @@ pub fn get_opts() -> EnvOptions {
         Err(_) => 5000,
     };
 
-    EnvOptions { port }
+    let model_path = match env::var("MODEL_PATH") {
+        Ok(value) => value,
+        Err(_) => "./models/ggml-large.bin".to_string(),
+    };
+
+    EnvOptions { port, model_path }
 }

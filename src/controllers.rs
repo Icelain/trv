@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex, Once};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 
-use uuid::Uuid;
 use once_cell::sync::Lazy;
+use uuid::Uuid;
 
 use core::convert::Infallible;
 use std::collections::HashMap;
@@ -20,11 +20,7 @@ use std::collections::HashMap;
 use crate::process::process;
 use crate::whisper_pool::WhisperPool;
 
-static WHISPER_POOL: Lazy<WhisperPool> = Lazy::new(|| {
-
-    WhisperPool::new_pool()
-
-});
+static WHISPER_POOL: Lazy<WhisperPool> = Lazy::new(|| WhisperPool::new_pool());
 
 pub fn index() -> MethodRouter<(), Infallible> {
     get(|| async { response::Html(include_str!("../templates/index.html")) })
@@ -160,5 +156,3 @@ async fn get_file(mut multipart: Multipart) -> impl IntoResponse {
 fn to_tmpfile_path(uuid: String) -> String {
     return format!("./tmpfiles/{}_blob", uuid);
 }
-
-

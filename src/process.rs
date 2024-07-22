@@ -3,11 +3,15 @@ use std::sync::{Arc, Mutex};
 use tokio::process::Command;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperState};
 
+pub fn to_outputfile_name(tmpfile_name: String) -> String {
+    format!("{}_output.wav", tmpfile_name)
+}
+
 pub async fn process(
     tmpfile_name: String,
     whisper_state: Arc<Mutex<WhisperState>>,
 ) -> Result<String, impl std::error::Error> {
-    let output_path = format!("{}_output.wav", tmpfile_name);
+    let output_path = to_outputfile_name(tmpfile_name.clone());
     let input_path = tmpfile_name;
 
     let _output = match Command::new("ffmpeg")

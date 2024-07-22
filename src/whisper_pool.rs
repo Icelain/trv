@@ -39,12 +39,9 @@ fn create_whisper_state() -> Arc<Mutex<WhisperState>> {
 }
 
 pub struct WhisperPool {
-
     // only one state for now
     states: [Arc<Mutex<WhisperState>>; 1],
 }
-
-
 
 impl WhisperPool {
     pub fn new_pool() -> Self {
@@ -54,8 +51,6 @@ impl WhisperPool {
     }
 
     pub fn get_state(&self) -> Arc<Mutex<WhisperState>> {
-        
         return self.states[0].clone();
-
     }
 }

@@ -17,7 +17,7 @@ use uuid::Uuid;
 use core::convert::Infallible;
 use std::collections::HashMap;
 
-use crate::process::process;
+use crate::process::{process, to_outputfile_name};
 use crate::whisper_pool::WhisperPool;
 
 static WHISPER_POOL: Lazy<WhisperPool> = Lazy::new(|| WhisperPool::new_pool());
@@ -34,6 +34,8 @@ async fn get_file(mut multipart: Multipart) -> impl IntoResponse {
     let uuid_to_inputfile: Arc<Mutex<HashMap<String, String>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let output_response: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    // uuids for each file
     let mut file_ids = Vec::new();
 
     let process_error_string = Arc::new(Mutex::new(String::new()));
@@ -89,15 +91,17 @@ async fn get_file(mut multipart: Multipart) -> impl IntoResponse {
         file_ids.push(file_uuid);
     }
 
-    let mut handles = Vec::new();
+    let mut process_handles = Vec::new();
 
-    for uuid in file_ids.iter() {
+    let file_id_len = file_ids.len();
+
+    for i in 0..file_id_len {
+        let uuid: String = file_ids[i].clone();
         let input_path = to_tmpfile_path(uuid.clone());
 
         let safe_uuid_to_inputfile = uuid_to_inputfile.clone();
         let safe_output_response = output_response.clone();
 
-        let uuid_clone: String = uuid.clone();
         let safe_process_error_string = process_error_string.clone();
         let safe_process_error_once = process_error_once.clone();
         let safe_maybe_error_filename = maybe_error_filename.clone();
@@ -108,7 +112,7 @@ async fn get_file(mut multipart: Multipart) -> impl IntoResponse {
                     let received_file_name = safe_uuid_to_inputfile
                         .lock()
                         .unwrap()
-                        .get(&uuid_clone)
+                        .get(&uuid)
                         .unwrap()
                         .to_owned();
                     safe_output_response
@@ -121,17 +125,40 @@ async fn get_file(mut multipart: Multipart) -> impl IntoResponse {
                     *safe_maybe_error_filename.lock().unwrap() = safe_uuid_to_inputfile
                         .lock()
                         .unwrap()
-                        .get(&uuid_clone)
+                        .get(&uuid)
                         .unwrap()
                         .to_owned();
                 }),
             }
         });
 
-        handles.push(handle);
+        process_handles.push(handle);
     }
 
-    future::try_join_all(handles).await.unwrap();
+    future::try_join_all(process_handles).await.unwrap();
+
+    //clear files after transcription ends with/without error
+
+    let mut deletion_handles = Vec::new();
+
+    for i in 0..file_id_len {
+        let uuid: String = file_ids[i].clone();
+        let handle = tokio::spawn(async move {
+            let tmpfile_path = to_tmpfile_path(uuid.clone());
+
+            // remove input file
+            tokio::fs::remove_file(tmpfile_path.clone()).await.unwrap();
+
+            // remove output file
+            tokio::fs::remove_file(to_outputfile_name(tmpfile_path))
+                .await
+                .unwrap();
+        });
+
+        deletion_handles.push(handle);
+    }
+
+    future::try_join_all(deletion_handles).await.unwrap();
 
     let maybe_error = process_error_string.clone().lock().unwrap().to_owned();
     let maybe_error_fname = maybe_error_filename.clone().lock().unwrap().to_owned();

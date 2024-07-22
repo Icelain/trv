@@ -1,4 +1,4 @@
 /target
-!/models/.gitkeep
-!/tmpfiles/.gitkeep
+!models/.gitkeep
+!tmpfiles/.gitkeep
 Cargo.lock

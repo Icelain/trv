@@ -40,17 +40,37 @@ fn create_whisper_state() -> Arc<Mutex<WhisperState>> {
 
 pub struct WhisperPool {
     // only one state for now
-    states: [Arc<Mutex<WhisperState>>; 1],
+    states: Vec<Arc<Mutex<WhisperState>>>,
+    last_state_index: Option<usize>,
 }
 
 impl WhisperPool {
-    pub fn new_pool() -> Self {
+    pub fn new_pool(nstates: usize) -> Self {
+        let mut states = Vec::new();
+        for _ in 0..nstates {
+            states.push(create_whisper_state());
+        }
+
         Self {
-            states: [create_whisper_state()],
+            states,
+            last_state_index: None,
         }
     }
 
-    pub fn get_state(&self) -> Arc<Mutex<WhisperState>> {
-        return self.states[0].clone();
+    pub fn get_state(&mut self) -> Arc<Mutex<WhisperState>> {
+        if self.last_state_index.is_none() {
+            self.last_state_index = Some(0);
+            return self.states[0].clone();
+        }
+    
+        if self.last_state_index.unwrap() == self.states.len() - 1 {
+
+            self.last_state_index = Some(0);
+            return self.states[0].clone();
+
+        }
+
+        self.last_state_index = Some((self.last_state_index.unwrap() + 1));
+        return self.states[(self.last_state_index.unwrap() - 1)].clone();
     }
 }

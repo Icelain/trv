@@ -17,10 +17,12 @@ use uuid::Uuid;
 use core::convert::Infallible;
 use std::collections::HashMap;
 
+use crate::env;
 use crate::process::{process, to_outputfile_name};
 use crate::whisper_pool::WhisperPool;
 
-static WHISPER_POOL: Lazy<WhisperPool> = Lazy::new(|| WhisperPool::new_pool());
+static mut WHISPER_POOL: Lazy<WhisperPool> =
+    Lazy::new(|| WhisperPool::new_pool(env::get_opts().nstates));
 
 pub fn index() -> MethodRouter<(), Infallible> {
     get(|| async { response::Html(include_str!("../templates/index.html")) })
@@ -107,7 +109,7 @@ async fn get_file(mut multipart: Multipart) -> impl IntoResponse {
         let safe_maybe_error_filename = maybe_error_filename.clone();
 
         let handle = tokio::spawn(async move {
-            match process(input_path, WHISPER_POOL.get_state()).await {
+            match process(input_path, unsafe {WHISPER_POOL.get_state()}).await {
                 Ok(output) => {
                     let received_file_name = safe_uuid_to_inputfile
                         .lock()

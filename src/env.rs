@@ -3,6 +3,7 @@ use std::env;
 pub struct EnvOptions {
     pub port: usize,
     pub model_path: String,
+    pub nstates: usize,
 }
 
 pub fn get_opts() -> EnvOptions {
@@ -25,5 +26,23 @@ pub fn get_opts() -> EnvOptions {
         Err(_) => "./models/ggml-large.bin".to_string(),
     };
 
-    EnvOptions { port, model_path }
+    let nstates = match env::var("NSTATES") {
+        Ok(value) => {
+            let res = match value.parse::<usize>() {
+                Ok(state_usize) => state_usize,
+                Err(_) => {
+                    panic!("Invalid nstates")
+                }
+            };
+
+            res
+        }
+        Err(_) => 1,
+    };
+
+    EnvOptions {
+        port,
+        model_path,
+        nstates,
+    }
 }

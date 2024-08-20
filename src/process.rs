@@ -50,7 +50,7 @@ impl<'a> std::fmt::Display for TranscribeError<'a> {
     }
 }
 
-async fn transcribe_audio<'state>(
+async fn transcribe_audio(
     whisper_state: Arc<Mutex<WhisperState>>,
     filepath: &String,
 ) -> Result<String, TranscribeError> {

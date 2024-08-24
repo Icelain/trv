@@ -8,4 +8,4 @@ A simple web-based video/audio transcriber in rust. Proud ffmpeg and openai-whis
 In cargo.toml, set the whisper.cpp dependency's feature to whatever is available on your system. Eg: cuda/metal/rocm.
 
 Then,
-```cargo run release```
+```cargo run --release```
